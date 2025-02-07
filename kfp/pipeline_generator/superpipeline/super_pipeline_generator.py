@@ -1,5 +1,17 @@
-import yaml
+# (C) Copyright IBM Corp. 2024.
+# Licensed under the Apache License, Version 2.0 (the “License”);
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#  http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an “AS IS” BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+################################################################################
 
+import yaml
+import os
 
 PRE_COMMIT = "../pre-commit-config.yaml"
 PIPELINE_TEMPLATE_FILE = "template_superpipeline.py"
@@ -56,10 +68,6 @@ if __name__ == "__main__":
     pipeline_metadata = pipeline_definitions[PIPELINE_METADATA]
     pipeline_tasks = pipeline_definitions[PIPELINE_TASKS]
     common_input_params = pipeline_definitions[COMMON_INPUT_PARAMETERS]
-
-    component_spec_path = pipeline_metadata.get("component_spec_path", "")
-    if component_spec_path == "":
-        component_spec_path = "../../../../../kfp/kfp_ray_components/"
 
     for task in pipeline_tasks:
         task_name = task["name"]
@@ -132,7 +140,6 @@ if __name__ == "__main__":
         superpipeline_name=pipeline_metadata[NAME],
         superpipeline_description=pipeline_metadata[DESCRIPTION],
         sub_workflows_components=pipeline_definitions[PIPELINE_TASKS],
-        component_spec_path=component_spec_path,
         p1_parameters=pipeline_definitions[PIPELINE_TASKS],
         add_p2_parameters=common_input_params,
         sub_workflows_parameters=sub_workflows_parameters,

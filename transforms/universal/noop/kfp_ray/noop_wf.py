@@ -15,19 +15,24 @@ import kfp.compiler as compiler
 import kfp.components as comp
 import kfp.dsl as dsl
 
-from workflow_support.compile_utils import ONE_HOUR_SEC, ONE_WEEK_SEC, ComponentUtils
+from workflow_support.compile_utils import (
+    DEFAULT_KFP_COMPONENT_SPEC_PATH,
+    ONE_HOUR_SEC,
+    ONE_WEEK_SEC,
+    ComponentUtils,
+)
 
 
 task_image = "quay.io/dataprep1/data-prep-kit/noop-ray:latest"
 
 # the name of the job script
-EXEC_SCRIPT_NAME: str = "noop_transform_ray.py"
+EXEC_SCRIPT_NAME: str = "-m dpk_noop.ray.runtime"
 
 # components
 base_kfp_image = "quay.io/dataprep1/data-prep-kit/kfp-data-processing:latest"
 
 # path to kfp component specifications files
-component_spec_path = "../../../../kfp/kfp_ray_components/"
+component_spec_path = os.getenv("KFP_COMPONENT_SPEC_PATH", DEFAULT_KFP_COMPONENT_SPEC_PATH)
 
 # compute execution parameters. Here different transforms might need different implementations. As
 # a result, instead of creating a component we are creating it in place here.
@@ -37,6 +42,7 @@ def compute_exec_params_func(
     data_s3_config: str,
     data_max_files: int,
     data_num_samples: int,
+    data_checkpointing: bool,
     runtime_pipeline_id: str,
     runtime_job_id: str,
     runtime_code_location: dict,
@@ -48,6 +54,7 @@ def compute_exec_params_func(
         "data_s3_config": data_s3_config,
         "data_max_files": data_max_files,
         "data_num_samples": data_num_samples,
+        "data_checkpointing": data_checkpointing,
         "runtime_num_workers": KFPUtils.default_compute_execution_params(str(worker_options), str(actor_options)),
         "runtime_worker_options": str(actor_options),
         "runtime_pipeline_id": runtime_pipeline_id,
@@ -62,23 +69,11 @@ def compute_exec_params_func(
 # KFPv2 recommends using the `@dsl.component` decorator, which doesn't exist in KFPv1. Therefore, here we use
 # this if/else statement and explicitly call the decorator.
 if os.getenv("KFPv2", "0") == "1":
-    # In KFPv2 dsl.RUN_ID_PLACEHOLDER is deprecated and cannot be used since SDK 2.5.0. On another hand we cannot create
-    # a unique string in a component (at runtime) and pass it to the `clean_up_task` of `ExitHandler`, due to
-    # https://github.com/kubeflow/pipelines/issues/10187. Therefore, meantime we use a unique string created at
-    # compilation time.
-    import uuid
-
     compute_exec_params_op = dsl.component_decorator.component(
         func=compute_exec_params_func, base_image=base_kfp_image
     )
-    print(
-        "WARNING: the ray cluster name can be non-unique at runtime, please do not execute simultaneous Runs of the "
-        + "same version of the same pipeline !!!"
-    )
-    run_id = uuid.uuid4().hex
 else:
     compute_exec_params_op = comp.create_component_from_func(func=compute_exec_params_func, base_image=base_kfp_image)
-    run_id = dsl.RUN_ID_PLACEHOLDER
 
 # create Ray cluster
 create_ray_op = comp.load_component_from_file(component_spec_path + "createRayClusterComponent.yaml")
@@ -98,7 +93,8 @@ TASK_NAME: str = "noop"
 def noop(
     # Ray cluster
     ray_name: str = "noop-kfp-ray",  # name of Ray cluster
-    # Add image_pull_secret and image_pull_policy to ray workers if needed
+    ray_run_id_KFPv2: str = "",
+    # Add image_pull_secret, image_pull_policy and tolerations to ray options if needed
     ray_head_options: dict = {"cpu": 1, "memory": 4, "image": task_image},
     ray_worker_options: dict = {"replicas": 2, "max_replicas": 2, "min_replicas": 2, "cpu": 2, "memory": 4, "image": task_image},
     server_url: str = "http://kuberay-apiserver-service.kuberay.svc.cluster.local:8888",
@@ -120,6 +116,7 @@ def noop(
     """
     Pipeline to execute noop transform
     :param ray_name: name of the Ray cluster
+    :param ray_run_id_KFPv2: a unique string id used for the Ray cluster, applicable only in KFP v2.
     :param ray_head_options: head node options, containing the following:
         cpu - number of cpus
         memory - memory
@@ -153,6 +150,16 @@ def noop(
     :param noop_sleep_sec - noop sleep time
     :return: None
     """
+    # In KFPv2 dsl.RUN_ID_PLACEHOLDER is deprecated and cannot be used since SDK 2.5.0. On another hand we cannot create
+    # a unique string in a component (at runtime) and pass it to the `clean_up_task` of `ExitHandler`, due to
+    # https://github.com/kubeflow/pipelines/issues/10187. Therefore, meantime the user is requested to insert
+    # a unique string created at run creation time.
+    if os.getenv("KFPv2", "0") == "1":
+        print("WARNING: the ray cluster name can be non-unique at runtime, please do not execute simultaneous Runs of the "
+              "same version of the same pipeline !!!")
+        run_id = ray_run_id_KFPv2
+    else:
+        run_id = dsl.RUN_ID_PLACEHOLDER
     # create clean_up task
     clean_up_task = cleanup_ray_op(
         ray_name=ray_name, run_id=run_id, server_url=server_url, additional_params=additional_params
@@ -167,6 +174,7 @@ def noop(
             data_s3_config=data_s3_config,
             data_max_files=data_max_files,
             data_num_samples=data_num_samples,
+            data_checkpointing=data_checkpointing,
             runtime_pipeline_id=runtime_pipeline_id,
             runtime_job_id=run_id,
             runtime_code_location=runtime_code_location,

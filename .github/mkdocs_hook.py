@@ -1,3 +1,15 @@
+# (C) Copyright IBM Corp. 2024.
+# Licensed under the Apache License, Version 2.0 (the “License”);
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#  http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an “AS IS” BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+################################################################################
+
 import logging
 import os
 import re
@@ -64,7 +76,11 @@ def update_markdown_content_updated(markdown: str, replacements: List[Tuple[str,
     if len(replacements) > 0:
         for text, old_value, new_value in replacements:
             log.info(f"Updating Link: text: [{text}], link: {old_value}, updated link: {new_value}")
-            markdown = update_link(markdown, text, old_value, new_value)
+            try:
+                markdown = update_link(markdown, text, old_value, new_value)
+            except Exception as e:
+                log.info(f"Failed to update link: link: {old_value}, updated link: {new_value} due to {e}")
+
     return markdown
 
 

@@ -1,3 +1,15 @@
+# (C) Copyright IBM Corp. 2024.
+# Licensed under the Apache License, Version 2.0 (the “License”);
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#  http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an “AS IS” BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+################################################################################
+
 import os
 import sys
 
@@ -40,6 +52,27 @@ def run_test(pipeline_package_path: str, endpoint: str = "http://localhost:8080/
     logger.info(f"Pipeline {pipeline_name} successfully completed")
     return pipeline_name
 
+def _set_run_id(pipeline_package_path: str):
+    """
+    Assign a dummy run ID value for testing purposes. By default, this value
+    is empty and is set by the user during runtime.
+
+    :param pipeline_package_path: Local path to the pipeline package.
+    """
+    import yaml
+    import uuid
+
+    try:
+        stream = open(pipeline_package_path, "r")
+        docs = list(yaml.load_all(stream, yaml.FullLoader))
+        for doc in docs:
+            if "root" in doc:
+                doc["root"]["inputDefinitions"]["parameters"]["ray_run_id_KFPv2"]["defaultValue"] = uuid.uuid4().hex
+        with open(pipeline_package_path, "w") as outfile:
+            yaml.dump_all(docs, outfile)
+    except Exception as e:
+        logger.error(f"Failed to update run id value, exception {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     import argparse
@@ -62,6 +95,7 @@ if __name__ == "__main__":
             if pipeline is None:
                 sys.exit(1)
         case "sanity-test":
+            _set_run_id(args.pipeline_package_path)
             run = run_test(
                 endpoint=args.endpoint,
                 pipeline_package_path=args.pipeline_package_path,

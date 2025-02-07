@@ -14,19 +14,25 @@ import os
 import kfp.compiler as compiler
 import kfp.components as comp
 import kfp.dsl as dsl
-from workflow_support.compile_utils import ONE_HOUR_SEC, ONE_WEEK_SEC, ComponentUtils
+from workflow_support.compile_utils import (
+    DEFAULT_KFP_COMPONENT_SPEC_PATH,
+    ONE_HOUR_SEC,
+    ONE_WEEK_SEC,
+    ComponentUtils,
+)
 
 
 task_image = "quay.io/dataprep1/data-prep-kit/pdf2parquet-ray:latest"
 
 # the name of the job script
-EXEC_SCRIPT_NAME: str = "pdf2parquet_transform_ray.py"
+EXEC_SCRIPT_NAME: str = "-m dpk_pdf2parquet.ray.transform"
 
 # components
-base_kfp_image = "quay.io/dataprep1/data-prep-kit/kfp-data-processing:latest"
+base_kfp_image = "quay.io/dataprep1/data-prep-kit/kfp-data-processing:0.2.3"
 
 # path to kfp component specifications files
-component_spec_path = "../../../../kfp/kfp_ray_components/"
+component_spec_path = os.getenv("KFP_COMPONENT_SPEC_PATH", DEFAULT_KFP_COMPONENT_SPEC_PATH)
+
 
 # compute execution parameters. Here different transforms might need different implementations. As
 # a result, instead of creating a component we are creating it in place here.
@@ -39,8 +45,11 @@ def compute_exec_params_func(
     runtime_pipeline_id: str,
     runtime_job_id: str,
     runtime_code_location: dict,
+    pdf2parquet_batch_size: int,
     pdf2parquet_do_table_structure: bool,
     pdf2parquet_do_ocr: bool,
+    pdf2parquet_ocr_engine: str,
+    pdf2parquet_bitmap_area_threshold: float,
 ) -> dict:
     from runtime_utils import KFPUtils
 
@@ -53,8 +62,11 @@ def compute_exec_params_func(
         "runtime_pipeline_id": runtime_pipeline_id,
         "runtime_job_id": runtime_job_id,
         "runtime_code_location": str(runtime_code_location),
+        "pdf2parquet_batch_size": pdf2parquet_batch_size,
         "pdf2parquet_do_table_structure": pdf2parquet_do_table_structure,
         "pdf2parquet_do_ocr": pdf2parquet_do_ocr,
+        "pdf2parquet_ocr_engine": pdf2parquet_ocr_engine,
+        "pdf2parquet_bitmap_area_threshold": pdf2parquet_bitmap_area_threshold,
     }
 
 
@@ -63,23 +75,11 @@ def compute_exec_params_func(
 # KFPv2 recommends using the `@dsl.component` decorator, which doesn't exist in KFPv1. Therefore, here we use
 # this if/else statement and explicitly call the decorator.
 if os.getenv("KFPv2", "0") == "1":
-    # In KFPv2 dsl.RUN_ID_PLACEHOLDER is deprecated and cannot be used since SDK 2.5.0. On another hand we cannot create
-    # a unique string in a component (at runtime) and pass it to the `clean_up_task` of `ExitHandler`, due to
-    # https://github.com/kubeflow/pipelines/issues/10187. Therefore, meantime we use a unique string created at
-    # compilation time.
-    import uuid
-
     compute_exec_params_op = dsl.component_decorator.component(
         func=compute_exec_params_func, base_image=base_kfp_image
     )
-    print(
-        "WARNING: the ray cluster name can be non-unique at runtime, please do not execute simultaneous Runs of the "
-        + "same version of the same pipeline !!!"
-    )
-    run_id = uuid.uuid4().hex
 else:
     compute_exec_params_op = comp.create_component_from_func(func=compute_exec_params_func, base_image=base_kfp_image)
-    run_id = dsl.RUN_ID_PLACEHOLDER
 
 # create Ray cluster
 create_ray_op = comp.load_component_from_file(component_spec_path + "createRayClusterComponent.yaml")
@@ -98,9 +98,17 @@ TASK_NAME: str = "pdf2parquet"
 def pdf2parquet(
     # Ray cluster
     ray_name: str = "pdf2parquet-kfp-ray",  # name of Ray cluster
+    ray_run_id_KFPv2: str = "",   # Ray cluster unique ID used only in KFP v2
     # Add image_pull_secret and image_pull_policy to ray workers if needed
     ray_head_options: dict = {"cpu": 1, "memory": 4, "image": task_image},
-    ray_worker_options: dict = {"replicas": 2, "max_replicas": 2, "min_replicas": 2, "cpu": 2, "memory": 4, "image": task_image},
+    ray_worker_options: dict = {
+        "replicas": 2,
+        "max_replicas": 2,
+        "min_replicas": 2,
+        "cpu": 2,
+        "memory": 4,
+        "image": task_image,
+    },
     server_url: str = "http://kuberay-apiserver-service.kuberay.svc.cluster.local:8888",
     # data access
     data_s3_config: str = "[{'input_folder': 'test/pdf2parquet/input/', 'output_folder': 'test/pdf2parquet/output/'}]",
@@ -108,18 +116,22 @@ def pdf2parquet(
     data_max_files: int = -1,
     data_num_samples: int = -1,
     # orchestrator
-    runtime_actor_options: dict = {'num_cpus': 0.8},
+    runtime_actor_options: dict = {"num_cpus": 0.8},
     runtime_pipeline_id: str = "pipeline_id",
-    runtime_code_location: dict = {'github': 'github', 'commit_hash': '12345', 'path': 'path'},
+    runtime_code_location: dict = {"github": "github", "commit_hash": "12345", "path": "path"},
     # pdf2parquet parameters
+    pdf2parquet_batch_size: int = -1,
     pdf2parquet_do_table_structure: bool = True,
     pdf2parquet_do_ocr: bool = False,
+    pdf2parquet_ocr_engine: str = "easyocr",
+    pdf2parquet_bitmap_area_threshold: float = 0.05,
     # additional parameters
     additional_params: str = '{"wait_interval": 2, "wait_cluster_ready_tmout": 400, "wait_cluster_up_tmout": 300, "wait_job_ready_tmout": 400, "wait_print_tmout": 30, "http_retries": 5, "delete_cluster_delay_minutes": 0}',
 ):
     """
     Pipeline to execute PDF2PARQUET transform
     :param ray_name: name of the Ray cluster
+    :param ray_run_id_KFPv2: a unique string id used for the Ray cluster, applicable only in KFP v2.
     :param ray_head_options: head node options, containing the following:
         cpu - number of cpus
         memory - memory
@@ -150,12 +162,27 @@ def pdf2parquet(
     :param runtime_actor_options - actor options
     :param runtime_pipeline_id - pipeline id
     :param runtime_code_location - code location
+    :param pdf2parquet_batch_size - how many inputs to batch into one output table
     :param pdf2parquet_do_table_structure - run table structure model
     :param pdf2parquet_do_ocr - run ocr model
+    :param pdf2parquet_ocr_engine - which ocr engine
+    :param pdf2parquet_bitmap_area_threshold - threshold for bitmaps
     :return: None
     """
+    # In KFPv2 dsl.RUN_ID_PLACEHOLDER is deprecated and cannot be used since SDK 2.5.0. On another hand we cannot create
+    # a unique string in a component (at runtime) and pass it to the `clean_up_task` of `ExitHandler`, due to
+    # https://github.com/kubeflow/pipelines/issues/10187. Therefore, meantime the user is requested to insert
+    # a unique string created at run creation time.
+    if os.getenv("KFPv2", "0") == "1":
+        print("WARNING: the ray cluster name can be non-unique at runtime, please do not execute simultaneous Runs of the "
+              "same version of the same pipeline !!!")
+        run_id = ray_run_id_KFPv2
+    else:
+        run_id = dsl.RUN_ID_PLACEHOLDER
     # create clean_up task
-    clean_up_task = cleanup_ray_op(ray_name=ray_name, run_id=run_id, server_url=server_url, additional_params=additional_params)
+    clean_up_task = cleanup_ray_op(
+        ray_name=ray_name, run_id=run_id, server_url=server_url, additional_params=additional_params
+    )
     ComponentUtils.add_settings_to_component(clean_up_task, ONE_HOUR_SEC * 2)
     # pipeline definition
     with dsl.ExitHandler(clean_up_task):
@@ -169,8 +196,11 @@ def pdf2parquet(
             runtime_pipeline_id=runtime_pipeline_id,
             runtime_job_id=run_id,
             runtime_code_location=runtime_code_location,
+            pdf2parquet_batch_size=pdf2parquet_batch_size,
             pdf2parquet_do_table_structure=pdf2parquet_do_table_structure,
             pdf2parquet_do_ocr=pdf2parquet_do_ocr,
+            pdf2parquet_ocr_engine=pdf2parquet_ocr_engine,
+            pdf2parquet_bitmap_area_threshold=pdf2parquet_bitmap_area_threshold,
         )
         ComponentUtils.add_settings_to_component(compute_exec_params, ONE_HOUR_SEC * 2)
         # start Ray cluster

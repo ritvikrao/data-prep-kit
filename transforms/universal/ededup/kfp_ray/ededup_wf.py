@@ -15,19 +15,25 @@ import kfp.compiler as compiler
 import kfp.components as comp
 import kfp.dsl as dsl
 from src.ededup_compute_execution_params import ededup_compute_execution_params
-from workflow_support.compile_utils import ONE_HOUR_SEC, ONE_WEEK_SEC, ComponentUtils
+from workflow_support.compile_utils import (
+    DEFAULT_KFP_COMPONENT_SPEC_PATH,
+    ONE_HOUR_SEC,
+    ONE_WEEK_SEC,
+    ComponentUtils,
+)
 
 
 task_image = "quay.io/dataprep1/data-prep-kit/ededup-ray:latest"
 
 # the name of the job script
-EXEC_SCRIPT_NAME: str = "ededup_transform_ray.py"
+EXEC_SCRIPT_NAME: str = "-m dpk_ededup.ray.transform"
 
 # components
 base_kfp_image = "quay.io/dataprep1/data-prep-kit/kfp-data-processing:latest"
 
 # path to kfp component specifications files
-component_spec_path = "../../../../kfp/kfp_ray_components/"
+component_spec_path = os.getenv("KFP_COMPONENT_SPEC_PATH", DEFAULT_KFP_COMPONENT_SPEC_PATH)
+
 
 # KFPv1 and KFP2 uses different methods to create a component from a function. KFPv1 uses the
 # `create_component_from_func` function, but it is deprecated by KFPv2 and so has a different import path.
@@ -43,14 +49,10 @@ if os.getenv("KFPv2", "0") == "1":
     compute_exec_params_op = dsl.component_decorator.component(
         func=ededup_compute_execution_params, base_image=base_kfp_image
     )
-    run_id = uuid.uuid4().hex
+    
 else:
     compute_exec_params_op = comp.create_component_from_func(
         func=ededup_compute_execution_params, base_image=base_kfp_image
-    )
-    print(
-        "WARNING: the ray cluster name can be non-unique at runtime, please do not execute simultaneous Runs of the "
-        + "same version of the same pipeline !!!"
     )
     run_id = dsl.RUN_ID_PLACEHOLDER
 
@@ -72,9 +74,17 @@ TASK_NAME: str = "ededup"
 def ededup(
     # Ray cluster
     ray_name: str = "ededup-kfp-ray",  # name of Ray cluster
+    ray_run_id_KFPv2: str = "",   # Ray cluster unique ID used only in KFP v2
     # Add image_pull_secret and image_pull_policy to ray workers if needed
     ray_head_options: dict = {"cpu": 1, "memory": 4, "image": task_image},
-    ray_worker_options: dict = {"replicas": 2, "max_replicas": 2, "min_replicas": 2, "cpu": 2, "memory": 4, "image": task_image},
+    ray_worker_options: dict = {
+        "replicas": 2,
+        "max_replicas": 2,
+        "min_replicas": 2,
+        "cpu": 2,
+        "memory": 4,
+        "image": task_image,
+    },
     server_url: str = "http://kuberay-apiserver-service.kuberay.svc.cluster.local:8888",
     # data access. checkpointing is not supported by dedup
     data_s3_config: str = "{'input_folder': 'test/ededup/input/', 'output_folder': 'test/ededup/output'}",
@@ -84,7 +94,7 @@ def ededup(
     # orchestrator
     runtime_actor_options: dict = {"num_cpus": 0.8},
     runtime_pipeline_id: str = "pipeline_id",
-    runtime_code_location: dict = {'github': 'github', 'commit_hash': '12345', 'path': 'path'},
+    runtime_code_location: dict = {"github": "github", "commit_hash": "12345", "path": "path"},
     # ededup
     ededup_hash_cpu: float = 0.5,
     ededup_doc_column: str = "contents",
@@ -98,6 +108,7 @@ def ededup(
     """
     Pipeline to execute EDEDUP transform
     :param ray_name: name of the Ray cluster
+    :param ray_run_id_KFPv2: a unique string id used for the Ray cluster, applicable only in KFP v2.
     :param ray_head_options: head node options, containing the following:
         cpu - number of cpus
         memory - memory
@@ -135,8 +146,20 @@ def ededup(
     :param ededup_n_samples - number of samples for parameters computation
     :return: None
     """
+    # In KFPv2 dsl.RUN_ID_PLACEHOLDER is deprecated and cannot be used since SDK 2.5.0. On another hand we cannot create
+    # a unique string in a component (at runtime) and pass it to the `clean_up_task` of `ExitHandler`, due to
+    # https://github.com/kubeflow/pipelines/issues/10187. Therefore, meantime the user is requested to insert
+    # a unique string created at run creation time.
+    if os.getenv("KFPv2", "0") == "1":
+        print("WARNING: the ray cluster name can be non-unique at runtime, please do not execute simultaneous Runs of the "
+              "same version of the same pipeline !!!")
+        run_id = ray_run_id_KFPv2
+    else:
+        run_id = dsl.RUN_ID_PLACEHOLDER
     # create clean_up task
-    clean_up_task = cleanup_ray_op(ray_name=ray_name, run_id=run_id, server_url=server_url, additional_params=additional_params)
+    clean_up_task = cleanup_ray_op(
+        ray_name=ray_name, run_id=run_id, server_url=server_url, additional_params=additional_params
+    )
     ComponentUtils.add_settings_to_component(clean_up_task, ONE_HOUR_SEC * 2)
     # pipeline definition
     with dsl.ExitHandler(clean_up_task):
