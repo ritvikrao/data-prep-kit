@@ -12,7 +12,8 @@
 
 from typing import Any
 
-import ray
+#import ray
+from charm4py import ray
 from data_processing.runtime import AbstractTransformFileProcessor
 from data_processing.utils import UnrecoverableException
 

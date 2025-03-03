@@ -12,7 +12,8 @@
 
 from typing import Any
 
-import ray
+#import ray
+from charm4py import ray
 from data_processing.transform import TransformStatistics
 
 

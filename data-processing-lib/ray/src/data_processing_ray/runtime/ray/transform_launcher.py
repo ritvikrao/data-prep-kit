@@ -14,7 +14,8 @@ import argparse
 import sys
 import time
 
-import ray
+#import ray
+from charm4py import ray
 from data_processing.data_access import DataAccessFactory, DataAccessFactoryBase
 from data_processing.runtime.transform_launcher import AbstractTransformLauncher
 from data_processing.utils import get_logger, str2bool

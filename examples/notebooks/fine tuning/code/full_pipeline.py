@@ -17,7 +17,7 @@ from data_processing.utils import TransformUtils
 from collections import defaultdict
 
 from pathlib import Path
-from ededup_transform_ray import EdedupRayTransformConfiguration
+from dpk_ededup.ray.transform import EdedupRayTransformConfiguration
 import pprint
 
 def read_parquet_bulk(dir_path):

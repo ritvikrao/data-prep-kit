@@ -14,7 +14,8 @@ import logging
 import time
 from typing import Any
 
-import ray
+#import ray
+from charm4py import ray
 from data_processing.utils import GB, UnrecoverableException
 from ray.actor import ActorHandle
 from ray.exceptions import RayError
